@@ -2,7 +2,7 @@
 FROM ubuntu:16.04
 MAINTAINER Daniel van Gils
 
-RUN apk --update upgrade && apk add curl ca-certificates && rm -rf /var/cache/apk/*
+RUN apt-get -y upgrade && apt-get -y install curl ca-certificates
 
 RUN mkdir -p /app
 WORKDIR /app
