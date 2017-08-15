@@ -5,20 +5,21 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/cloud66/starter/common"
+	"github.com/cloud66/starter/packs"
+	"github.com/getsentry/raven-go"
+	"github.com/heroku/docker-registry-client/registry"
+	"github.com/lunny/html2md"
+	"github.com/mitchellh/go-homedir"
 	"io"
 	"io/ioutil"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"regexp"
-	"strings"
-
-	"github.com/cloud66/starter/common"
-	"github.com/cloud66/starter/packs"
-	"github.com/getsentry/raven-go"
-	"github.com/heroku/docker-registry-client/registry"
-	"github.com/mitchellh/go-homedir"
 	"runtime"
+	"strings"
+	"unicode"
 )
 
 type downloadFile struct {
@@ -65,7 +66,7 @@ var (
 	flagDaemon      bool
 	flagRegistry    bool
 
-	//flags are gone
+	flagParse bool
 
 	config = &Config{}
 
@@ -101,6 +102,8 @@ func init() {
 	-g service: only the service.yml + Dockerfile (cloud 66 specific)
 	-g dockerfile,service,docker-compose (all files)
 	-g kube: starter will generate a kubernetes deployment from service.yml`)
+
+	flag.BoolVar(&flagParse, "parse", false, "runs starter to do nothing related to starter")
 
 	//sentry DSN setup
 	raven.SetDSN("https://b67185420a71409d900c7affe3a4287d:c5402650974e4a179227591ef8c4fd75@sentry.io/187937")
@@ -225,6 +228,44 @@ func main() {
 	}
 
 	flag.Parse()
+
+	if flagParse {
+
+		//use -p to set dir
+
+		if flagPath != "" {
+
+			filepath.Walk(flagPath, func(path string, info os.FileInfo, err error) error {
+				if !info.IsDir() {
+
+					_, _ = os.Open(info.Name())
+
+					text, _ := ioutil.ReadFile(flagPath + info.Name())
+
+					html2md.AddRule("pre", &html2md.Rule{
+						Patterns: []string{"pre"},
+						Tp:       0,
+						Replacement: func(innerHTML string, attrs []string) string {
+							if len(attrs) > 1 {
+								return "```" + attrs[1] + "```"
+							}
+							return ""
+						},
+					})
+
+					md := html2md.Convert(string(text))
+					generateFilesFromThis(md)
+				} else {
+
+				}
+				return nil
+			})
+		} else {
+			common.PrintlnError("lol - give me a path usign the -p flag boii")
+		}
+
+		return
+	}
 
 	if flagDaemon && flagConfig != "" {
 		if _, err := os.Stat(flagConfig); os.IsNotExist(err) {
@@ -482,6 +523,205 @@ func analyze(
 	result.DeployCommands = []string{}
 
 	return result, nil
+}
+
+func generateFilesFromThis(text string) {
+	var inlineContent, filename string
+
+	for i := 0; i < len(text); i++ {
+		if text[i] == '#' {
+			inlineContent = ""
+			filename = ""
+			for ; i < len(text); i++ {
+				if text[i] == '#' || text[i] == ' ' || text[i] == '\n' {
+					inlineContent = string(append([]byte(inlineContent), text[i]))
+				} else {
+					break
+				}
+			}
+			for ; i < len(text); i++ {
+				if text[i] == '\n' {
+					break
+				} else {
+					inlineContent = string(append([]byte(inlineContent), text[i]))
+					if text[i] != '#' && text[i] != '\n' {
+						filename = string(append([]byte(filename), text[i]))
+					}
+				}
+			}
+			filename = getFileName(filename)
+
+			for ; i < len(text)-1; i++ {
+				if text[i+1] == '#' {
+					inlineContent = string(append([]byte(inlineContent), text[i]))
+					break
+				} else {
+					inlineContent = string(append([]byte(inlineContent), text[i]))
+				}
+			}
+
+			if inlineContent != "" {
+
+				for j := 0; j < len(inlineContent)-3; j++ {
+					preInlineContent := ""
+					var l, r int
+					if inlineContent[j] == '`' && inlineContent[j+1] == '`' && inlineContent[j+2] == '`' {
+						l = j
+						j += 6
+						for ; j < len(inlineContent); j++ {
+							if inlineContent[j] == '`' && inlineContent[j-1] == '`' && inlineContent[j-2] == '`' {
+								r = j
+								break
+							}
+						}
+						if r != 0 {
+							for k := l; k <= r+1; k++ {
+
+								preInlineContent = string(append([]byte(preInlineContent), inlineContent[k]))
+							}
+							code_filename := filename+"-"
+							for k:=3;k<=15;k++{
+								if unicode.IsLower(rune(preInlineContent[k])){
+									code_filename = string(append([]byte(code_filename), preInlineContent[k]))
+								}
+							}
+							code_filename = strings.Trim(strings.Trim(code_filename, "\n"), "<") + ".md"
+							preInlineContent = "---\nlayout: code\n---\n" + preInlineContent[3:][:len(preInlineContent)-3]
+
+							err := ioutil.WriteFile(string(flagPath+code_filename), []byte(preInlineContent), 0644)
+							if err != nil {
+								common.PrintlnError("You fucked up: ", err, "\n\n\n")
+							}
+
+							inlineContent = inlineContent[:l] + "\n\n{%include _inlines/path_to_code %}\n\n" + inlineContent[r+1:]
+							r = 0
+							l = 0
+						}
+					}
+				}
+			}
+
+			filename += ".md"
+			err := ioutil.WriteFile(string(filename), []byte(inlineContent), 0644)
+			if err != nil {
+				common.PrintlnError("You fucked up: ", err, "\n\n\n")
+			}
+
+		}
+	}
+}
+
+/*
+	if inlineContent != "" {
+
+		pre, _ := regexp.MatchString("<pre", inlineContent)
+		filename = getFileName(inlineContent)
+
+		if pre {
+			for j := 0; j < len(inlineContent)-3; j++ {
+				preInlineContent := ""
+				var l, r int
+				if inlineContent[j] == '<' && inlineContent[j+1] == 'p' && inlineContent[j+2] == 'r' && inlineContent[j+3] == 'e' {
+					l = j
+					j += 6
+					for ; j < len(inlineContent); j++ {
+						if inlineContent[j] == '>' && inlineContent[j-1] == 'e' && inlineContent[j-2] == 'r' && inlineContent[j-3] == 'p' {
+							r = j
+							break
+						}
+					}
+
+					if r != 0 {
+						for k := l; k <= r+1; k++ {
+							preInlineContent = string(append([]byte(preInlineContent), inlineContent[k]))
+						}
+
+						code_filename := filename + preInlineContent[:12]
+						code_filename = strings.Trim(strings.Trim(filename, "\n"), "<")
+
+						preInlineContent = "---\nlayout: code\n---\n" + preInlineContent
+
+						preInlineContent = removeTags(preInlineContent)
+						common.PrintlnWarning(preInlineContent)
+
+						f, _ := os.Create(flagPath + filename)
+						defer f.Close()
+						err := ioutil.WriteFile(string(flagPath+code_filename), []byte(preInlineContent), 0644)
+						if err != nil {
+							common.PrintlnError("You fucked up: ", err, "\n\n\n")
+						}
+						inlineContent = inlineContent[:l] + "\n\n{%include _inlines/path_to_code %}\n\n" + inlineContent[r+1:]
+					}
+				}
+			}
+		}
+
+		inlineContent = removeTags(inlineContent)
+		inlineContent = checkForEnd(inlineContent)
+
+		common.PrintlnTitle(filename)
+		fmt.Println(string(inlineContent) + "\n\n---------")
+
+		f, _ := os.Create(flagPath + filename)
+		defer f.Close()
+		err := ioutil.WriteFile(string(flagPath+filename), []byte(inlineContent), 0644)
+		if err != nil {
+			common.PrintlnError("You fucked up: ", err, "\n\n\n")
+		}
+		inlineContent = ""
+	}
+}
+
+}
+*/
+func removeTags(inlineContent string) string {
+	var header bool
+
+	for k := 0; k < len(inlineContent)-1; k++ {
+		header = false
+		if inlineContent[k] == '<' {
+			if inlineContent[k+1] == 'h' && inlineContent[k+2] == '2' {
+				header = true
+			}
+			for j := k + 1; j < len(inlineContent); j++ {
+				if inlineContent[j] == '>' && inlineContent[j+1] != '\n' {
+					if header {
+						inlineContent = inlineContent[:k] + "\n# " + inlineContent[j+1:]
+					} else {
+						inlineContent = inlineContent[:k] + inlineContent[j+1:]
+					}
+					break
+				} else if inlineContent[j] == '>' && inlineContent[j+1] == '\n' {
+					if header {
+						inlineContent = inlineContent[:k] + "\n# " + inlineContent[j+2:]
+					} else {
+						inlineContent = inlineContent[:k] + inlineContent[j+1:]
+					}
+					break
+				}
+			}
+		}
+	}
+	return inlineContent
+}
+
+func getFileName(filename string) string {
+
+	if !(unicode.IsLower(rune(filename[0])) || unicode.IsUpper(rune(filename[0]))) {
+		//		filename = filename[1:]
+	}
+	filename = strings.ToLower(strings.Replace(filename, " ", "-", -1))
+	filename = strings.Trim(filename, "\n")
+
+	return filename
+}
+
+func checkForEnd(inline string) string {
+	htm, _ := regexp.MatchString("</htm", inline)
+	if htm {
+		inline = inline[:len(inline)-5]
+	}
+	return inline
 }
 
 func recoverPanic() {
