@@ -348,7 +348,6 @@ func analyze_sourcecode(config *Config, path string, generate string, git_repo s
 	}
 	return result
 }
-
 func unzip(src, dest string) error {
 
 	var filenames []string
@@ -405,6 +404,7 @@ func unzip(src, dest string) error {
 	}
 	return nil
 }
+
 
 func Filter(vs []string, f func(string) bool) []string {
 	vsf := make([]string, 0)
